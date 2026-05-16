@@ -24,6 +24,9 @@ out/
 *.wg
 wg.conf
 proxy.json
+
+# WireGuard / Wi-Fi secrets embedded for M1 dev only.
+firmware/include/wg_secrets.h
 .env
 .env.*
 !.env.example
