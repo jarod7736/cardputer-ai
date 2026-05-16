@@ -23,3 +23,8 @@ CONFIG_SPIRAM=n
 # Bring up Wi-Fi STA with sane buffer counts; tuned in M2 if needed.
 CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
 CONFIG_ESP_WIFI_STATIC_TX_BUFFER_NUM=8
+
+# esp_wireguard: allow more than one allowed-IP per peer. The library
+# auto-adds the device's own /32 into slot 0; we need slots free to add
+# the routed CIDR (0.0.0.0/0 for full-tunnel, or LAN+WG-subnet for split).
+CONFIG_WIREGUARD_MAX_SRC_IPS=8

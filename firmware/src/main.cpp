@@ -1,11 +1,26 @@
 #include <Arduino.h>
 #include <IPAddress.h>
 #include <WiFi.h>
+#include <M5Unified.h>
 
 #include "wifi_sta.h"
 #include "wg_link.h"
 #include "net_probe.h"
 #include "wg_secrets.h"   // gitignored — see wg_secrets.h.example
+
+// Minimal LCD status line — not the real UI (that's M3+). Just so the
+// device isn't a black brick during M1 testing.
+static void lcd_status(const char* line, uint16_t color = TFT_WHITE) {
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setTextColor(color, TFT_BLACK);
+  M5.Display.setTextDatum(top_left);
+  M5.Display.setTextSize(2);
+  M5.Display.setCursor(4, 4);
+  M5.Display.println("Cardputer-AI M1");
+  M5.Display.setTextSize(1);
+  M5.Display.setCursor(4, 32);
+  M5.Display.println(line);
+}
 
 // One source of truth for the WG config, used by both setup() and the
 // supervisor loop. The Wi-Fi creds and WG secrets live in wg_secrets.h.
@@ -52,6 +67,10 @@ static void run_reachability_proof() {
 }
 
 void setup() {
+  auto cfg5 = M5.config();
+  M5.begin(cfg5);
+  lcd_status("booting...");
+
   Serial.begin(115200);
   uint32_t deadline = millis() + 10000;
   while (!Serial && millis() < deadline) delay(50);
@@ -60,11 +79,14 @@ void setup() {
   Serial.println();
   Serial.println("==== Cardputer-AI M1 — Wi-Fi + WireGuard ====");
 
+  lcd_status("wifi: connecting...");
   if (!wifi_sta::connect(wg_secrets::kWifiSSID, wg_secrets::kWifiPassword,
                          Serial)) {
     Serial.println("STOP: Wi-Fi failed — supervisor will retry");
+    lcd_status("wifi: FAILED", TFT_RED);
     return;
   }
+  lcd_status("wifi: OK");
 
   // Quick DNS sanity before we ask WG to resolve its endpoint.
   IPAddress test_ip;
@@ -74,15 +96,28 @@ void setup() {
     Serial.println("dns: lookup FAILED (continuing — WG endpoint is an IP)");
   }
 
+  lcd_status("wg: connecting...");
   auto cfg = wg_cfg();
   if (!wg_link::start(cfg, Serial)) {
     Serial.println("STOP: WireGuard failed — supervisor will retry");
+    lcd_status("wg: FAILED", TFT_RED);
     return;
   }
+  lcd_status("wg: UP, testing...");
 
   // Give the kernel a moment after route swap before we hit the wire.
   delay(500);
   run_reachability_proof();
+
+  // The reachability_proof printed its own SUCCESS/FAIL line; reflect
+  // that on the LCD using whether both pings worked. Cheap: read the
+  // last two ping results via a re-ping (fast since the tunnel is up).
+  IPAddress in_tunnel; in_tunnel.fromString(wg_secrets::kInTunnelTestIP);
+  IPAddress outbound;  outbound.fromString(wg_secrets::kOutboundTestIP);
+  bool a = net_probe::ping(in_tunnel, 1).ok;
+  bool b = net_probe::ping(outbound, 1).ok;
+  if (a && b) lcd_status("M1 SUCCESS: tunnel works", TFT_GREEN);
+  else        lcd_status("M1: partial / fail", TFT_YELLOW);
 }
 
 void loop() {
@@ -103,9 +138,16 @@ void loop() {
   }
 
   if (!wg_link::is_up()) {
-    Serial.println("supervisor: wg down — restarting tunnel");
-    auto cfg = wg_cfg();
-    wg_link::start(cfg, Serial);
+    // Backoff so a persistently-failing peer doesn't spam logs.
+    static uint32_t wg_backoff = 2000;
+    static uint32_t next_attempt = 0;
+    if (millis() >= next_attempt) {
+      Serial.println("supervisor: wg down — restarting tunnel");
+      auto cfg = wg_cfg();
+      bool ok = wg_link::start(cfg, Serial);
+      next_attempt = millis() + wg_backoff;
+      wg_backoff = ok ? 2000 : min<uint32_t>(wg_backoff * 2, 30000);
+    }
   } else {
     // Healthy path. Heartbeat once a minute so the log isn't silent.
     static uint32_t last_hb = 0;

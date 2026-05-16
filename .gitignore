@@ -40,3 +40,8 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# PlatformIO ESP-IDF generated artifacts
+firmware/sdkconfig.*
+firmware/CMakeLists.txt
+!firmware/sdkconfig.defaults

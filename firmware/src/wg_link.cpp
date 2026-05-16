@@ -31,10 +31,23 @@ static bool parse_cidr(const char* cidr, char* ip_out, size_t ip_len,
   return n > 0 && (size_t) n < mask_len;
 }
 
+// Internal helper: tear down whatever partial state exists and return `r`.
+// Used by start() so any error path leaves the module in a clean state.
+static bool start_fail(Stream& out, const char* reason, bool log_reason, bool r) {
+  if (log_reason) out.printf("wg: start failed: %s\n", reason);
+  if (s_running) {
+    esp_wireguard_disconnect(&s_ctx);
+    s_running = false;
+  }
+  return r;
+}
+
 bool start(const Config& cfg, Stream& out, uint32_t timeout_ms) {
   if (s_running) {
-    out.println("wg: already running; stop() before restarting");
-    return false;
+    // Idempotent: tear down any leftover state from a previous attempt
+    // before bringing the tunnel back up.
+    esp_wireguard_disconnect(&s_ctx);
+    s_running = false;
   }
 
   out.println("wg: starting tunnel");
@@ -57,29 +70,28 @@ bool start(const Config& cfg, Stream& out, uint32_t timeout_ms) {
     out.printf("wg: esp_wireguard_init failed: %d\n", err);
     return false;
   }
+  s_running = true;  // init succeeded → from here, failure paths must disconnect
 
   err = esp_wireguard_connect(&s_ctx);
   if (err != ESP_OK && err != ESP_ERR_RETRY) {
-    out.printf("wg: esp_wireguard_connect failed: %d\n", err);
-    return false;
+    return start_fail(out, "esp_wireguard_connect", true, false);
   }
   // ESP_ERR_RETRY just means DNS is still resolving the endpoint —
   // the connect will be retried internally. Treat as not-yet-up below.
 
-  s_running = true;
-
   // Add the routed CIDR to the allowed-ip list. For full-tunnel this is
-  // 0.0.0.0/0; for split-tunnel it's the home LAN.
+  // 0.0.0.0/0; for split-tunnel it's the home LAN. Requires
+  // CONFIG_WIREGUARD_MAX_SRC_IPS > 1 in sdkconfig (default is 1 — the
+  // library auto-fills slot 0 with the device's own /32).
   char ip[32];
   char mask[32];
   if (!parse_cidr(cfg.allowed_ip_cidr, ip, sizeof(ip), mask, sizeof(mask))) {
-    out.printf("wg: bad allowed_ip_cidr '%s'\n", cfg.allowed_ip_cidr);
-    return false;
+    return start_fail(out, "bad allowed_ip_cidr", true, false);
   }
   err = esp_wireguard_add_allowed_ip(&s_ctx, ip, mask);
   if (err != ESP_OK) {
     out.printf("wg: add_allowed_ip(%s/%s) failed: %d\n", ip, mask, err);
-    return false;
+    return start_fail(out, "add_allowed_ip", false, false);
   }
   out.printf("wg: allowed_ip added: %s mask %s\n", ip, mask);
 
@@ -87,7 +99,7 @@ bool start(const Config& cfg, Stream& out, uint32_t timeout_ms) {
     err = esp_wireguard_set_default(&s_ctx);
     if (err != ESP_OK) {
       out.printf("wg: set_default failed: %d\n", err);
-      return false;
+      return start_fail(out, "set_default", false, false);
     }
     out.println("wg: WG interface is now the default route");
   }
@@ -107,6 +119,10 @@ bool start(const Config& cfg, Stream& out, uint32_t timeout_ms) {
 
   out.printf("wg: peer did not come up within %lu ms\n",
              (unsigned long) timeout_ms);
+  // Leave the tunnel up — the peer may handshake later (DNS slow,
+  // server busy, intermittent UDP). Supervisor polls is_up() and the
+  // library will retry the handshake internally. If you want a hard
+  // teardown on timeout, call wg_link::stop().
   return false;
 }
 
