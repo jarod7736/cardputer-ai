@@ -42,8 +42,13 @@ marked `?` were not yet captured at the time of this commit.
 
 ## Toolchain
 
-- PlatformIO Core version: ?
-- ESP-IDF 5.x hello-world build clean: ?
+- PlatformIO Core version: 6.1.19
+- ESP-IDF 5.x hello-world build clean: yes (`firmware-idf-probe/` builds in
+  ~4 min from cold; mbedTLS + lwIP link without errors; produces a valid
+  ESP32-S3 image). Build artifacts are in `.pio/build/cardputer-adv-idf/`.
+- Arduino-on-`esp32-s3-devkitc-1` build clean: yes (`firmware/` builds in
+  ~30s from warm; final firmware uses 15.0% of 3.34 MB app partition and
+  6.7% of 320 KB internal SRAM with all probes wired in).
 
 ## Open questions resolved
 
