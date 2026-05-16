@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from cardputer_proxy import auth
+from cardputer_proxy.adapters.anthropic import AnthropicAdapter
 from cardputer_proxy.config import load_settings
 from cardputer_proxy.schemas import ChatCompletionRequest
+from cardputer_proxy.sse import chunks_to_sse
 
 
 def create_app() -> FastAPI:
@@ -29,10 +32,18 @@ def create_app() -> FastAPI:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"unknown profile: {req.profile_id}",
             )
-        # Adapter dispatch + SSE streaming land in Task 4.
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="anthropic adapter wired up in Task 4",
+        if profile.provider != "anthropic":
+            # M4 introduces other adapters; until then, anything else is 501.
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail=f"adapter not implemented: {profile.provider}",
+            )
+
+        adapter = AnthropicAdapter()
+        chunk_iter = adapter.stream_chat(profile, req, secret=settings.anthropic_api_key)
+        return StreamingResponse(
+            chunks_to_sse(chunk_iter),
+            media_type="text/event-stream",
         )
 
     return app
