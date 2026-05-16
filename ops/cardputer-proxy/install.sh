@@ -10,12 +10,31 @@ SECRETS_DIR="$CFG_DIR/secrets"
 LOG_DIR="/var/log/cardputer-proxy"
 SVC_USER="cardputer-proxy"
 SVC_UNIT_NAME="cardputer-proxy.service"
-PYTHON="${PYTHON:-python3.11}"
-
 if [[ $EUID -ne 0 ]]; then
   echo "Run as root: sudo $0" >&2
   exit 1
 fi
+
+# Pick a Python 3.11+ interpreter. Override with PYTHON=python3.X if you want a
+# specific one; otherwise we walk known names and accept the first that exists.
+pick_python() {
+  if [[ -n "${PYTHON:-}" ]] && command -v "$PYTHON" >/dev/null 2>&1; then
+    echo "$PYTHON"; return
+  fi
+  for cand in python3.13 python3.12 python3.11 python3; do
+    if command -v "$cand" >/dev/null 2>&1; then
+      ver=$("$cand" -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+      maj=${ver%%.*}; min=${ver##*.}
+      if (( maj > 3 )) || { (( maj == 3 )) && (( min >= 11 )); }; then
+        echo "$cand"; return
+      fi
+    fi
+  done
+  echo "No Python >= 3.11 found on PATH; install python3.11 (or set PYTHON=...)" >&2
+  exit 1
+}
+PYTHON="$(pick_python)"
+echo "using $PYTHON ($($PYTHON --version))"
 
 # 1. System user (idempotent)
 if ! id -u "$SVC_USER" >/dev/null 2>&1; then
