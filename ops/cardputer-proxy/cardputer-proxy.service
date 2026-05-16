@@ -1,0 +1,43 @@
+[Unit]
+Description=Cardputer-AI claude-proxy (OAI-compatible to Anthropic)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=cardputer-proxy
+Group=cardputer-proxy
+WorkingDirectory=/opt/cardputer-proxy
+
+# Secrets are mounted into a runtime tmpfs at $CREDENTIALS_DIRECTORY;
+# the service reads them via CARDPUTER_PROXY_SECRETS_DIR.
+LoadCredential=anthropic_api_key:/etc/cardputer-proxy/secrets/anthropic_api_key
+LoadCredential=device_bearer_token:/etc/cardputer-proxy/secrets/device_bearer_token
+Environment=CARDPUTER_PROXY_SECRETS_DIR=%d
+
+EnvironmentFile=-/etc/cardputer-proxy/cardputer-proxy.env
+ExecStart=/opt/cardputer-proxy/.venv/bin/python -m cardputer_proxy
+
+Restart=on-failure
+RestartSec=2s
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/cardputer-proxy
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
