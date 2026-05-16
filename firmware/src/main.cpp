@@ -2,6 +2,8 @@
 #include <IPAddress.h>
 #include <WiFi.h>
 #include <M5Unified.h>
+#include <time.h>
+#include <sys/time.h>
 
 #include "wifi_sta.h"
 #include "wg_link.h"
@@ -87,6 +89,29 @@ void setup() {
     return;
   }
   lcd_status("wifi: OK");
+
+  // CRITICAL for WireGuard: sync wall clock via NTP before bringing the
+  // tunnel up. WG handshake initiations carry a TAI64N timestamp; the
+  // server tracks the greatest accepted value and rejects any equal-or-
+  // lesser timestamp as a replay. Without NTP, every reboot reuses the
+  // same near-epoch timestamp and after the very first successful
+  // handshake the server refuses all subsequent ones.
+  lcd_status("ntp: syncing...");
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  Serial.println("ntp: waiting for time sync...");
+  uint32_t ntp_deadline = millis() + 15000;
+  time_t now = 0;
+  while ((now = time(nullptr)) < 1700000000 && millis() < ntp_deadline) {
+    delay(250);
+    Serial.print('.');
+  }
+  Serial.println();
+  if (now >= 1700000000) {
+    Serial.printf("ntp: time set, epoch=%ld\n", (long) now);
+  } else {
+    Serial.println("ntp: FAILED to sync; WG handshake will likely be rejected as replay");
+    lcd_status("ntp: FAILED", TFT_YELLOW);
+  }
 
   // Quick DNS sanity before we ask WG to resolve its endpoint.
   IPAddress test_ip;

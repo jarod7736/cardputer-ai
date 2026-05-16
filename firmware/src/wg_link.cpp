@@ -7,12 +7,27 @@
 
 namespace wg_link {
 
+// The droscy/esp_wireguard library documents that esp_wireguard_init MUST
+// be called only once for a given peer. To recycle the tunnel, call
+// esp_wireguard_disconnect() then esp_wireguard_connect() — without
+// re-initing. We split our public start()/stop() to honor that, even
+// though the supervisor calls them many times across reconnects.
+
 static wireguard_config_t s_cfg{};
 static wireguard_ctx_t    s_ctx = ESP_WIREGUARD_CONTEXT_DEFAULT();
-static bool               s_running = false;
+static bool               s_initialized = false;   // esp_wireguard_init has been called
+static bool               s_connected   = false;   // esp_wireguard_connect succeeded
+static bool               s_default_set = false;   // route swap done
 
-// Parse "0.0.0.0/0" or "192.168.1.0/24" into ("0.0.0.0", "0.0.0.0") or
-// ("192.168.1.0", "255.255.255.0"). Returns false if input is malformed.
+// Strings backing s_cfg need stable storage because the library reads
+// them lazily (DNS callbacks, handshake builder).
+static char s_priv[64];
+static char s_pub[64];
+static char s_endpoint[64];
+static char s_addr[20];
+static char s_mask[20];
+
+// Parse "0.0.0.0/0" or "192.168.1.0/24" → ip+mask strings.
 static bool parse_cidr(const char* cidr, char* ip_out, size_t ip_len,
                        char* mask_out, size_t mask_len) {
   const char* slash = std::strchr(cidr, '/');
@@ -31,87 +46,102 @@ static bool parse_cidr(const char* cidr, char* ip_out, size_t ip_len,
   return n > 0 && (size_t) n < mask_len;
 }
 
-// Internal helper: tear down whatever partial state exists and return `r`.
-// Used by start() so any error path leaves the module in a clean state.
-static bool start_fail(Stream& out, const char* reason, bool log_reason, bool r) {
-  if (log_reason) out.printf("wg: start failed: %s\n", reason);
-  if (s_running) {
-    esp_wireguard_disconnect(&s_ctx);
-    s_running = false;
-  }
-  return r;
+// Copy strings into module-owned storage and point s_cfg at them.
+static bool capture_config(const Config& cfg, Stream& out) {
+  auto safe_copy = [&](char* dst, size_t cap, const char* src, const char* name) -> bool {
+    if (!src) { out.printf("wg: missing %s\n", name); return false; }
+    size_t n = std::strlen(src);
+    if (n >= cap) { out.printf("wg: %s too long\n", name); return false; }
+    std::memcpy(dst, src, n + 1);
+    return true;
+  };
+  if (!safe_copy(s_priv,     sizeof(s_priv),     cfg.device_private_key, "private_key")) return false;
+  if (!safe_copy(s_pub,      sizeof(s_pub),      cfg.peer_public_key,    "peer_public_key")) return false;
+  if (!safe_copy(s_endpoint, sizeof(s_endpoint), cfg.peer_endpoint_host, "endpoint")) return false;
+  if (!safe_copy(s_addr,     sizeof(s_addr),     cfg.device_address,     "device_address")) return false;
+  if (!safe_copy(s_mask,     sizeof(s_mask),     cfg.device_netmask,     "device_netmask")) return false;
+
+  s_cfg = (wireguard_config_t) ESP_WIREGUARD_CONFIG_DEFAULT();
+  s_cfg.private_key          = s_priv;
+  s_cfg.public_key           = s_pub;
+  s_cfg.endpoint             = s_endpoint;
+  s_cfg.port                 = cfg.peer_endpoint_port;
+  s_cfg.address              = s_addr;
+  s_cfg.netmask              = s_mask;
+  s_cfg.persistent_keepalive = cfg.persistent_keepalive_s;
+  return true;
 }
 
 bool start(const Config& cfg, Stream& out, uint32_t timeout_ms) {
-  if (s_running) {
-    // Idempotent: tear down any leftover state from a previous attempt
-    // before bringing the tunnel back up.
-    esp_wireguard_disconnect(&s_ctx);
-    s_running = false;
+  // Phase 1: one-shot init. If already initialized for the same config,
+  // skip — the library refuses repeat inits. We also assume the config
+  // doesn't change between calls (device key / peer pubkey / endpoint
+  // are compile-time constants from wg_secrets.h).
+  if (!s_initialized) {
+    if (!capture_config(cfg, out)) return false;
+    out.println("wg: starting tunnel (first-time init)");
+    out.printf("  endpoint: %s:%u\n", s_endpoint, cfg.peer_endpoint_port);
+    out.printf("  device:   %s/%s\n", s_addr, s_mask);
+    out.printf("  allowed:  %s\n", cfg.allowed_ip_cidr);
+    out.printf("  full-tun: %s\n", cfg.set_as_default_route ? "yes" : "no");
+
+    esp_err_t err = esp_wireguard_init(&s_cfg, &s_ctx);
+    if (err != ESP_OK) {
+      out.printf("wg: esp_wireguard_init failed: %d\n", err);
+      return false;
+    }
+    s_initialized = true;
+  } else {
+    out.println("wg: re-arming tunnel (already initialized)");
   }
 
-  out.println("wg: starting tunnel");
-  out.printf("  endpoint: %s:%u\n", cfg.peer_endpoint_host, cfg.peer_endpoint_port);
-  out.printf("  device:   %s/%s\n", cfg.device_address, cfg.device_netmask);
-  out.printf("  allowed:  %s\n", cfg.allowed_ip_cidr);
-  out.printf("  full-tun: %s\n", cfg.set_as_default_route ? "yes" : "no");
-
-  s_cfg = (wireguard_config_t) ESP_WIREGUARD_CONFIG_DEFAULT();
-  s_cfg.private_key          = cfg.device_private_key;
-  s_cfg.public_key           = cfg.peer_public_key;
-  s_cfg.endpoint             = cfg.peer_endpoint_host;
-  s_cfg.port                 = cfg.peer_endpoint_port;
-  s_cfg.address              = cfg.device_address;
-  s_cfg.netmask              = cfg.device_netmask;
-  s_cfg.persistent_keepalive = cfg.persistent_keepalive_s;
-
-  esp_err_t err = esp_wireguard_init(&s_cfg, &s_ctx);
-  if (err != ESP_OK) {
-    out.printf("wg: esp_wireguard_init failed: %d\n", err);
+  // Phase 2: connect — idempotent. If we previously connected and then
+  // got disconnected, the library wants us to call disconnect+connect.
+  // Here we always call connect; if it returns "already connected" we
+  // treat as success. ESP_ERR_RETRY means DNS still resolving.
+  esp_err_t err = esp_wireguard_connect(&s_ctx);
+  if (err != ESP_OK && err != ESP_ERR_RETRY) {
+    out.printf("wg: esp_wireguard_connect failed: %d\n", err);
     return false;
   }
-  s_running = true;  // init succeeded → from here, failure paths must disconnect
+  s_connected = true;
 
-  err = esp_wireguard_connect(&s_ctx);
-  if (err != ESP_OK && err != ESP_ERR_RETRY) {
-    return start_fail(out, "esp_wireguard_connect", true, false);
-  }
-  // ESP_ERR_RETRY just means DNS is still resolving the endpoint —
-  // the connect will be retried internally. Treat as not-yet-up below.
-
-  // Add the routed CIDR to the allowed-ip list. For full-tunnel this is
-  // 0.0.0.0/0; for split-tunnel it's the home LAN. Requires
-  // CONFIG_WIREGUARD_MAX_SRC_IPS > 1 in sdkconfig (default is 1 — the
-  // library auto-fills slot 0 with the device's own /32).
+  // Phase 3: add the routed CIDR. peer_add_ip is idempotent in the
+  // library (it scans for a matching ip/mask first), so calling on
+  // every (re)connect is safe.
   char ip[32];
   char mask[32];
   if (!parse_cidr(cfg.allowed_ip_cidr, ip, sizeof(ip), mask, sizeof(mask))) {
-    return start_fail(out, "bad allowed_ip_cidr", true, false);
+    out.printf("wg: bad allowed_ip_cidr '%s'\n", cfg.allowed_ip_cidr);
+    return false;
   }
   err = esp_wireguard_add_allowed_ip(&s_ctx, ip, mask);
   if (err != ESP_OK) {
     out.printf("wg: add_allowed_ip(%s/%s) failed: %d\n", ip, mask, err);
-    return start_fail(out, "add_allowed_ip", false, false);
-  }
-  out.printf("wg: allowed_ip added: %s mask %s\n", ip, mask);
-
-  if (cfg.set_as_default_route) {
-    err = esp_wireguard_set_default(&s_ctx);
-    if (err != ESP_OK) {
-      out.printf("wg: set_default failed: %d\n", err);
-      return start_fail(out, "set_default", false, false);
-    }
-    out.println("wg: WG interface is now the default route");
+    // Don't fail hard — the device's own /32 is already routed, and the
+    // peer may still come up. Continue.
+  } else {
+    out.printf("wg: allowed_ip ok: %s/%s\n", ip, mask);
   }
 
-  // Poll for peer-up. The first handshake happens after connect kicks
-  // off; the library reports up when the handshake completes.
+  // Phase 4: wait for handshake. We do NOT swap the default route yet —
+  // that happens only after peer_is_up confirms.
   uint32_t deadline = millis() + timeout_ms;
   while (millis() < deadline) {
     if (esp_wireguard_peer_is_up(&s_ctx) == ESP_OK) {
       time_t hs = 0;
       esp_wireguard_latest_handshake(&s_ctx, &hs);
       out.printf("wg: peer UP (last handshake epoch=%ld)\n", (long) hs);
+
+      if (cfg.set_as_default_route && !s_default_set) {
+        err = esp_wireguard_set_default(&s_ctx);
+        if (err == ESP_OK) {
+          s_default_set = true;
+          out.println("wg: WG interface is now the default route");
+        } else {
+          out.printf("wg: set_default failed (peer was up): %d\n", err);
+        }
+      }
       return true;
     }
     delay(200);
@@ -119,20 +149,19 @@ bool start(const Config& cfg, Stream& out, uint32_t timeout_ms) {
 
   out.printf("wg: peer did not come up within %lu ms\n",
              (unsigned long) timeout_ms);
-  // Leave the tunnel up — the peer may handshake later (DNS slow,
-  // server busy, intermittent UDP). Supervisor polls is_up() and the
-  // library will retry the handshake internally. If you want a hard
-  // teardown on timeout, call wg_link::stop().
+  // Library keeps the handshake timer running internally — supervisor
+  // can keep polling is_up(). We do NOT disconnect here; tearing the
+  // tunnel down would lose the lwIP netif slot we already initialized.
   return false;
 }
 
 bool is_up() {
-  if (!s_running) return false;
+  if (!s_initialized) return false;
   return esp_wireguard_peer_is_up(&s_ctx) == ESP_OK;
 }
 
 uint32_t seconds_since_last_handshake() {
-  if (!s_running) return UINT32_MAX;
+  if (!s_initialized) return UINT32_MAX;
   time_t hs = 0;
   if (esp_wireguard_latest_handshake(&s_ctx, &hs) != ESP_OK || hs == 0) {
     return UINT32_MAX;
@@ -143,9 +172,15 @@ uint32_t seconds_since_last_handshake() {
 }
 
 void stop() {
-  if (s_running) {
+  // Disconnect but DO NOT teardown the netif (re-init is forbidden by
+  // the library, so the netif must persist for the program's lifetime).
+  if (s_connected) {
+    if (s_default_set) {
+      esp_wireguard_restore_default(&s_ctx);
+      s_default_set = false;
+    }
     esp_wireguard_disconnect(&s_ctx);
-    s_running = false;
+    s_connected = false;
   }
 }
 
