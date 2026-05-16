@@ -1,7 +1,7 @@
 # M0 Hardware Report — Cardputer-ADV
 
 **Date captured:** 2026-05-16
-**Firmware commit:** (filled in by the finalize commit)
+**Firmware commit:** d6c1b9b (firmware that produced this report)
 
 This document captures findings from the M0 hardware bring-up probe.
 
