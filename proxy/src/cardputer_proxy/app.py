@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from typing import AsyncIterator
+
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
 
@@ -33,7 +36,6 @@ def create_app() -> FastAPI:
                 detail=f"unknown profile: {req.profile_id}",
             )
         if profile.provider != "anthropic":
-            # M4 introduces other adapters; until then, anything else is 501.
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail=f"adapter not implemented: {profile.provider}",
@@ -41,8 +43,30 @@ def create_app() -> FastAPI:
 
         adapter = AnthropicAdapter()
         chunk_iter = adapter.stream_chat(profile, req, secret=settings.anthropic_api_key)
+
+        # Pre-flight: draw the first chunk before we start sending SSE bytes.
+        # This way an upstream 4xx/5xx surfaces as a clean structured 502
+        # instead of as a half-written event-stream.
+        try:
+            first = await chunk_iter.__anext__()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"upstream": "anthropic", "upstream_status": e.response.status_code},
+            ) from e
+        except StopAsyncIteration:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"upstream": "anthropic", "upstream_status": None},
+            )
+
+        async def _wrapped() -> AsyncIterator[dict]:
+            yield first
+            async for ch in chunk_iter:
+                yield ch
+
         return StreamingResponse(
-            chunks_to_sse(chunk_iter),
+            chunks_to_sse(_wrapped()),
             media_type="text/event-stream",
         )
 

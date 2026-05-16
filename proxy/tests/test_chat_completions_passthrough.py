@@ -38,3 +38,24 @@ def test_passthrough_streams_oai_sse(client, httpx_mock: HTTPXMock):
     assert '"content":"hi there"' in body
     assert '"finish_reason":"stop"' in body
     assert "data: [DONE]" in body
+
+
+def test_upstream_5xx_surfaces_as_502(client, httpx_mock):
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.anthropic.com/v1/messages",
+        status_code=503,
+        json={"error": "overloaded"},
+    )
+    r = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer test-bearer"},
+        json={
+            "profile_id": "claude-opus",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    assert r.status_code == 502
+    body = r.json()
+    assert body["detail"]["upstream"] == "anthropic"
+    assert body["detail"]["upstream_status"] == 503
