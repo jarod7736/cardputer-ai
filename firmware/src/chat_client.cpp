@@ -42,11 +42,12 @@ static void json_escape_into(String& out, const String& src) {
   }
 }
 
-static String build_body(const std::vector<Message>& msgs) {
+static String build_body(const String& profile_id,
+                          const std::vector<Message>& msgs) {
   String out;
   out.reserve(256 + msgs.size() * 64);
   out += "{\"profile_id\":\"";
-  out += proxy_secrets::kProfileId;
+  out += profile_id;
   out += "\",\"stream\":true,\"messages\":[";
   for (size_t i = 0; i < msgs.size(); ++i) {
     if (i) out += ',';
@@ -100,13 +101,14 @@ static void extract_content(const char* line, String& delta_out) {
   }
 }
 
-SendResult send(const String& user_text,
+SendResult send(const String& profile_id,
+                const String& user_text,
                 std::function<void(const String&)> on_delta,
                 String& assistant_out) {
   SendResult r{false, ""};
   s_history.push_back({String("user"), user_text});
 
-  const String body = build_body(s_history);
+  const String body = build_body(profile_id, s_history);
   assistant_out = "";
 
   http_sse::Result hr = http_sse::post_sse(

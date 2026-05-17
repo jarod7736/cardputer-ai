@@ -18,10 +18,11 @@ struct SendResult {
 void begin();
 
 // Append user_text as a user turn, send the full conversation to the
-// proxy, accumulate the streamed reply into assistant_out. The
-// per-delta callback fires for each text chunk so the UI can paint as
-// it arrives.
-SendResult send(const String& user_text,
+// proxy under the given profile_id, accumulate the streamed reply into
+// assistant_out. The per-delta callback fires for each text chunk so
+// the UI can paint as it arrives.
+SendResult send(const String& profile_id,
+                const String& user_text,
                 std::function<void(const String&)> on_delta,
                 String& assistant_out);
 

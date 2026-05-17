@@ -3,6 +3,7 @@
 #include <M5Cardputer.h>
 #include <time.h>
 #include <sys/time.h>
+#include <vector>
 
 #include "wifi_sta.h"
 #include "wg_link.h"
@@ -12,6 +13,9 @@
 #include "scrollback.h"
 #include "wg_secrets.h"
 #include "proxy_secrets.h"
+#include "proxy_api.h"
+#include "profile_store.h"
+#include "picker_view.h"
 
 static wg_link::Config wg_cfg() {
   return wg_link::Config{
@@ -29,22 +33,31 @@ static wg_link::Config wg_cfg() {
 
 static String s_input;
 static size_t s_cursor = 0;
+static String s_active_profile;
+static std::vector<proxy_api::Profile> s_profiles;
 
 static void redraw() {
   chat_view::set_input(s_input.c_str(), s_cursor);
   chat_view::render();
 }
 
+static const char* label_for_id(const String& id) {
+  for (auto& p : s_profiles) {
+    if (p.id == id) return p.label.c_str();
+  }
+  return id.c_str();
+}
+
 static void send_current_input() {
   if (s_input.length() == 0) return;
 
-  // Echo the user turn first.
   String prefixed = String("you> ") + s_input;
   scrollback::push(scrollback::LineKind::kUserTurn,
                    prefixed.c_str(),
                    chat_view::scrollback_width_chars());
+  String prompt = String(label_for_id(s_active_profile)) + "> ";
   scrollback::push(scrollback::LineKind::kAssistant,
-                   "claude> ",
+                   prompt.c_str(),
                    chat_view::scrollback_width_chars());
   chat_view::mark_dirty();
   chat_view::set_status(chat_view::Status::kSending);
@@ -52,8 +65,9 @@ static void send_current_input() {
 
   String reply;
   auto result = chat_client::send(
+      s_active_profile,
       s_input,
-      /*on_delta=*/[](const String& d) {
+      [](const String& d) {
         scrollback::append_to_last(d.c_str(),
                                    chat_view::scrollback_width_chars());
         chat_view::mark_dirty();
@@ -75,6 +89,24 @@ static void send_current_input() {
   redraw();
 }
 
+static void open_picker() {
+  // Re-fetch in case the catalog changed on the proxy.
+  auto pr = proxy_api::fetch_profiles();
+  if (pr.ok) s_profiles = pr.profiles;
+  String chosen;
+  if (picker_view::run(s_profiles, s_active_profile, chosen)) {
+    s_active_profile = chosen;
+    profile_store::set_active_profile_id(s_active_profile);
+    chat_view::set_active_profile_label(label_for_id(s_active_profile));
+    scrollback::push(scrollback::LineKind::kSystem,
+                     (String("switched: ") + label_for_id(s_active_profile)).c_str(),
+                     chat_view::scrollback_width_chars());
+  }
+  // Returning to chat — repaint everything regardless of pick/cancel.
+  chat_view::mark_dirty();
+  redraw();
+}
+
 void setup() {
   auto cfg5 = M5.config();
   M5Cardputer.begin(cfg5, /*enableKeyboard=*/true);
@@ -87,6 +119,14 @@ void setup() {
   scrollback::begin();
   keyboard_input::begin();
   chat_client::begin();
+  profile_store::begin();
+
+  // Read the persisted active profile id; fall back to compile-time default.
+  s_active_profile = profile_store::active_profile_id();
+  if (s_active_profile.length() == 0) {
+    s_active_profile = proxy_secrets::kProfileId;
+  }
+  chat_view::set_active_profile_label(s_active_profile.c_str());
 
   chat_view::set_status(chat_view::Status::kWifiConnecting);
   redraw();
@@ -101,8 +141,6 @@ void setup() {
     return;
   }
 
-  // NTP before WG — see M1 report. Without this WG handshakes get rejected
-  // as replays after the first successful one.
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
   uint32_t ntp_deadline = millis() + 15000;
   while (time(nullptr) < 1700000000 && millis() < ntp_deadline) delay(250);
@@ -120,8 +158,17 @@ void setup() {
     return;
   }
 
+  // Tunnel is up — pull the catalog so we can show real labels.
+  auto pr = proxy_api::fetch_profiles();
+  if (pr.ok) {
+    s_profiles = pr.profiles;
+    chat_view::set_active_profile_label(label_for_id(s_active_profile));
+  } else {
+    Serial.printf("proxy_api: %s\n", pr.error);
+  }
+
   scrollback::push(scrollback::LineKind::kSystem,
-                   "tunnel up. type and hit enter.",
+                   "tunnel up. p=profiles, type+enter=send",
                    chat_view::scrollback_width_chars());
   chat_view::mark_dirty();
   chat_view::set_status(chat_view::Status::kReady);
@@ -129,7 +176,6 @@ void setup() {
 }
 
 void loop() {
-  // Supervisor: keep Wi-Fi + WG alive.
   if (!wifi_sta::is_up()) {
     chat_view::set_status(chat_view::Status::kWifiConnecting);
     redraw();
@@ -145,7 +191,6 @@ void loop() {
     redraw();
   }
 
-  // Status bar heartbeat: every 5 s while idle, show wg age + rssi.
   static uint32_t last_tick = 0;
   if (millis() - last_tick > 5000) {
     last_tick = millis();
@@ -157,7 +202,6 @@ void loop() {
     redraw();
   }
 
-  // Keyboard input.
   int k = keyboard_input::poll();
   if (k == keyboard_input::KB_ENTER) {
     send_current_input();
@@ -167,8 +211,12 @@ void loop() {
       s_cursor = s_input.length();
       redraw();
     }
+  } else if (k == 'p' && s_input.length() == 0) {
+    // Open profile picker only when input is empty (so 'p' is typeable
+    // mid-sentence).
+    open_picker();
   } else if (k >= 0x20 && k < 0x7F) {
-    if (s_input.length() < 76) {  // leave room for "> " prompt
+    if (s_input.length() < 76) {
       s_input += (char) k;
       s_cursor = s_input.length();
       redraw();

@@ -12,6 +12,14 @@ constexpr int KB_BACKSPACE = '\b';
 constexpr int KB_ESCAPE    = 27;
 constexpr int KB_TAB       = '\t';
 
+// Arrows: values above ASCII range so callers can treat all chars
+// uniformly. The library reports arrow keys via the hid_keys vector
+// (standard USB HID scan codes 0x4F-0x52), not via state.word.
+constexpr int KB_RIGHT     = 0x100 + 0x4F;
+constexpr int KB_LEFT      = 0x100 + 0x50;
+constexpr int KB_DOWN      = 0x100 + 0x51;
+constexpr int KB_UP        = 0x100 + 0x52;
+
 // Must be called after M5Cardputer.begin().
 void begin();
 
