@@ -55,8 +55,9 @@ static void send_current_input() {
   scrollback::push(scrollback::LineKind::kUserTurn,
                    prefixed.c_str(),
                    chat_view::scrollback_width_chars());
+  String prompt = String(label_for_id(s_active_profile)) + "> ";
   scrollback::push(scrollback::LineKind::kAssistant,
-                   "claude> ",
+                   prompt.c_str(),
                    chat_view::scrollback_width_chars());
   chat_view::mark_dirty();
   chat_view::set_status(chat_view::Status::kSending);
