@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "config": {
+    "server_pubkey": "REPLACE_WITH_WIREGUARD_SERVER_PUBLIC_KEY",
+    "server_endpoint": "vpn.example.com:51820",
+    "network_cidr": "10.42.0.0/24",
+    "proxy_host": "10.42.0.1",
+    "proxy_port": 8420,
+    "peers": []
+  }
+}

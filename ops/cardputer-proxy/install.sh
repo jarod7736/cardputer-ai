@@ -81,6 +81,23 @@ if [[ ! -f "$CFG_DIR/profiles.json" ]]; then
   echo "  sudo \$EDITOR $CFG_DIR/profiles.json"
 fi
 
+# 5.6 Peers config (M5) — don't clobber an existing file.
+if [[ ! -f "$CFG_DIR/peers.json" ]]; then
+  install -m 0640 -o root -g "$SVC_USER" \
+    "$REPO_DIR/ops/cardputer-proxy/peers.json.example" \
+    "$CFG_DIR/peers.json"
+  echo "Installed default peers.json. Edit server_pubkey + server_endpoint with:"
+  echo "  sudo \$EDITOR $CFG_DIR/peers.json"
+fi
+
+# 5.7 Tokens file (M5) — touch empty so the proxy doesn't have to handle absent.
+if [[ ! -f "$CFG_DIR/tokens.json" ]]; then
+  install -m 0640 -o root -g "$SVC_USER" /dev/null "$CFG_DIR/tokens.json"
+  printf '{"version": 1, "tokens": []}\n' > "$CFG_DIR/tokens.json"
+  chown root:"$SVC_USER" "$CFG_DIR/tokens.json"
+  chmod 0640 "$CFG_DIR/tokens.json"
+fi
+
 # 6. Reload + start (or restart if already enabled)
 systemctl daemon-reload
 if systemctl is-enabled --quiet "$SVC_UNIT_NAME"; then
