@@ -44,7 +44,14 @@ fi
 # 2. Directories
 install -d -m 0755 -o "$SVC_USER" -g "$SVC_USER" "$APP_DIR" "$LOG_DIR"
 install -d -m 0750 -o root        -g "$SVC_USER" "$CFG_DIR"
-install -d -m 0700 -o root        -g root         "$SECRETS_DIR"
+install -d -m 0750 -o root        -g "$SVC_USER" "$SECRETS_DIR"
+
+# 2.5 Fix perms on any existing secret files so the service user can read
+# them. Pre-M4 installs created them 0600 root:root.
+if compgen -G "$SECRETS_DIR/*" > /dev/null; then
+  chmod 0640 "$SECRETS_DIR"/*
+  chown root:"$SVC_USER" "$SECRETS_DIR"/*
+fi
 
 # 3. Sync source code (exclude .venv so we don't clobber the runtime env,
 #    and tests / dev artifacts).
@@ -64,6 +71,15 @@ sudo -u "$SVC_USER" "$APP_DIR/.venv/bin/pip" install --quiet "$APP_DIR"
 # 5. Systemd unit
 install -m 0644 "$REPO_DIR/ops/cardputer-proxy/cardputer-proxy.service" \
         "/etc/systemd/system/$SVC_UNIT_NAME"
+
+# 5.5 Profile catalog — don't clobber an existing file.
+if [[ ! -f "$CFG_DIR/profiles.json" ]]; then
+  install -m 0640 -o root -g "$SVC_USER" \
+    "$REPO_DIR/ops/cardputer-proxy/profiles.json.example" \
+    "$CFG_DIR/profiles.json"
+  echo "Installed default profiles.json. Edit with:"
+  echo "  sudo \$EDITOR $CFG_DIR/profiles.json"
+fi
 
 # 6. Reload + start (or restart if already enabled)
 systemctl daemon-reload

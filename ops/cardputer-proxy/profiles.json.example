@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "claude-opus",
+      "label": "Claude Opus 4.7",
+      "provider": "anthropic",
+      "endpoint": "https://api.anthropic.com",
+      "model": "claude-opus-4-7",
+      "max_tokens": 4096,
+      "temperature": 1.0,
+      "auth": {"kind": "proxy-secret", "secret_ref": "anthropic_api_key"}
+    },
+    {
+      "id": "claude-sonnet",
+      "label": "Claude Sonnet 4.6",
+      "provider": "anthropic",
+      "endpoint": "https://api.anthropic.com",
+      "model": "claude-sonnet-4-6",
+      "max_tokens": 4096,
+      "temperature": 1.0,
+      "auth": {"kind": "proxy-secret", "secret_ref": "anthropic_api_key"}
+    },
+    {
+      "id": "openai-4o-mini",
+      "label": "OpenAI gpt-4o-mini",
+      "provider": "openai",
+      "endpoint": "https://api.openai.com",
+      "model": "gpt-4o-mini",
+      "max_tokens": 2048,
+      "temperature": 0.7,
+      "auth": {"kind": "proxy-secret", "secret_ref": "openai_api_key"}
+    },
+    {
+      "id": "ollama-llama3",
+      "label": "Ollama Llama 3 8B",
+      "provider": "ollama",
+      "endpoint": "http://lobsterboy:11434",
+      "model": "llama3:8b",
+      "max_tokens": 2048,
+      "temperature": 0.7,
+      "auth": {"kind": "none"}
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 [project]
 name = "cardputer-proxy"
-version = "0.1.0"
-description = "OAI-compatible proxy for Cardputer-AI; M2 ships Anthropic adapter only."
+version = "0.2.0"
+description = "OAI-compatible proxy for Cardputer-AI; M4 ships profile CRUD + multi-adapter."
 requires-python = ">=3.11"
 authors = [{ name = "Jarod Belshaw" }]
 dependencies = [
