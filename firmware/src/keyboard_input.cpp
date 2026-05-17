@@ -23,7 +23,7 @@ static void enqueue(char c) {
 }
 
 static int dequeue() {
-  if (s_tail == s_head) return KEY_NONE;
+  if (s_tail == s_head) return KB_NONE;
   char c = s_queue[s_tail];
   s_tail = (uint8_t)((s_tail + 1) % sizeof(s_queue));
   return (int)(unsigned char) c;
@@ -50,10 +50,10 @@ int poll() {
 
   // Drain special keys before printables so the typing order matches what
   // the user pressed.
-  if (s_pending_enter)     { s_pending_enter     = false; return KEY_ENTER;     }
-  if (s_pending_backspace) { s_pending_backspace = false; return KEY_BACKSPACE; }
-  if (s_pending_escape)    { s_pending_escape    = false; return KEY_ESCAPE;    }
-  if (s_pending_tab)       { s_pending_tab       = false; return KEY_TAB;       }
+  if (s_pending_enter)     { s_pending_enter     = false; return KB_ENTER;     }
+  if (s_pending_backspace) { s_pending_backspace = false; return KB_BACKSPACE; }
+  if (s_pending_escape)    { s_pending_escape    = false; return KB_ESCAPE;    }
+  if (s_pending_tab)       { s_pending_tab       = false; return KB_TAB;       }
   return dequeue();
 }
 

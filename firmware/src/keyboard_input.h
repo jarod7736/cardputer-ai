@@ -4,11 +4,13 @@
 namespace keyboard_input {
 
 // Special key codes returned in addition to printable ASCII.
-constexpr int KEY_NONE      = -1;
-constexpr int KEY_ENTER     = '\r';
-constexpr int KEY_BACKSPACE = '\b';
-constexpr int KEY_ESCAPE    = 27;
-constexpr int KEY_TAB       = '\t';
+// Named KB_* (not KEY_*) to avoid colliding with M5Cardputer's
+// Keyboard_def.h macros (KEY_ENTER, KEY_BACKSPACE, etc.).
+constexpr int KB_NONE      = -1;
+constexpr int KB_ENTER     = '\r';
+constexpr int KB_BACKSPACE = '\b';
+constexpr int KB_ESCAPE    = 27;
+constexpr int KB_TAB       = '\t';
 
 // Must be called after M5Cardputer.begin().
 void begin();
