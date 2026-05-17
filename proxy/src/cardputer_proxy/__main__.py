@@ -14,9 +14,10 @@ import uvicorn
 
 def main() -> None:
     argv = sys.argv[1:]
-    if argv and argv[0] == "secrets":
+    if argv and argv[0] in ("secrets", "peer"):
         from cardputer_proxy import cli
-        sys.exit(cli.main(argv[1:]))
+        # cli.main expects the leading subcommand ("secrets" or "peer").
+        sys.exit(cli.main(argv))
 
     host = os.environ.get("CARDPUTER_PROXY_LISTEN_HOST", "127.0.0.1")
     port = int(os.environ.get("CARDPUTER_PROXY_LISTEN_PORT", "8420"))
