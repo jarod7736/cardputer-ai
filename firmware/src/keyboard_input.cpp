@@ -66,11 +66,14 @@ int poll() {
       // from there when Fn is held and swallow the printable.
       for (auto c : state.word) {
         switch (c) {
-          case ',': enqueue_special(KB_LEFT);  break;
-          case '.': enqueue_special(KB_DOWN);  break;
-          case ';': enqueue_special(KB_UP);    break;
-          case '/': enqueue_special(KB_RIGHT); break;
-          case '`': s_pending_escape = true;   break;  // Fn+` = Esc
+          case ',': enqueue_special(KB_LEFT);     break;
+          case '.': enqueue_special(KB_DOWN);     break;
+          case ';': enqueue_special(KB_UP);       break;
+          case '/': enqueue_special(KB_RIGHT);    break;
+          case '`': s_pending_escape = true;      break;  // Fn+` = Esc
+          case 's': case 'S':
+            enqueue_special(KB_SETTINGS);
+            break;
           default: break;
         }
       }
