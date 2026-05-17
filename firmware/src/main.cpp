@@ -1,31 +1,18 @@
 #include <Arduino.h>
-#include <IPAddress.h>
 #include <WiFi.h>
-#include <M5Unified.h>
+#include <M5Cardputer.h>
 #include <time.h>
 #include <sys/time.h>
 
 #include "wifi_sta.h"
 #include "wg_link.h"
-#include "net_probe.h"
-#include "wg_secrets.h"   // gitignored — see wg_secrets.h.example
+#include "chat_view.h"
+#include "chat_client.h"
+#include "keyboard_input.h"
+#include "scrollback.h"
+#include "wg_secrets.h"
+#include "proxy_secrets.h"
 
-// Minimal LCD status line — not the real UI (that's M3+). Just so the
-// device isn't a black brick during M1 testing.
-static void lcd_status(const char* line, uint16_t color = TFT_WHITE) {
-  M5.Display.fillScreen(TFT_BLACK);
-  M5.Display.setTextColor(color, TFT_BLACK);
-  M5.Display.setTextDatum(top_left);
-  M5.Display.setTextSize(2);
-  M5.Display.setCursor(4, 4);
-  M5.Display.println("Cardputer-AI M1");
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(4, 32);
-  M5.Display.println(line);
-}
-
-// One source of truth for the WG config, used by both setup() and the
-// supervisor loop. The Wi-Fi creds and WG secrets live in wg_secrets.h.
 static wg_link::Config wg_cfg() {
   return wg_link::Config{
     .device_private_key      = wg_secrets::kDevicePrivateKey,
@@ -40,148 +27,153 @@ static wg_link::Config wg_cfg() {
   };
 }
 
-// Run the M1 success-criteria checks once and print a verdict.
-static void run_reachability_proof() {
-  IPAddress in_tunnel;
-  in_tunnel.fromString(wg_secrets::kInTunnelTestIP);
-  IPAddress outbound;
-  outbound.fromString(wg_secrets::kOutboundTestIP);
+static String s_input;
+static size_t s_cursor = 0;
 
-  auto a = net_probe::ping(in_tunnel);
-  Serial.printf("ping in-tunnel %s: %s (%u ms, %u attempts)\n",
-                in_tunnel.toString().c_str(),
-                a.ok ? "OK" : "FAIL", a.round_trip_ms, a.attempts);
+static void redraw() {
+  chat_view::set_input(s_input.c_str(), s_cursor);
+  chat_view::render();
+}
 
-  auto b = net_probe::ping(outbound);
-  Serial.printf("ping outbound %s: %s (%u ms, %u attempts)\n",
-                outbound.toString().c_str(),
-                b.ok ? "OK" : "FAIL", b.round_trip_ms, b.attempts);
+static void send_current_input() {
+  if (s_input.length() == 0) return;
 
-  if (a.ok && b.ok) {
-    Serial.println("==== M1 SUCCESS: tunnel up + outbound through tunnel works ====");
-  } else if (a.ok && !b.ok) {
-    Serial.println("==== PARTIAL: tunnel reaches the WG peer, but no outbound through it ====");
-  } else if (!a.ok && b.ok) {
-    Serial.println("==== FAIL: outbound works but tunnel peer is unreachable ====");
+  // Echo the user turn first.
+  String prefixed = String("you> ") + s_input;
+  scrollback::push(scrollback::LineKind::kUserTurn,
+                   prefixed.c_str(),
+                   chat_view::scrollback_width_chars());
+  scrollback::push(scrollback::LineKind::kAssistant,
+                   "claude> ",
+                   chat_view::scrollback_width_chars());
+  chat_view::mark_dirty();
+  chat_view::set_status(chat_view::Status::kSending);
+  redraw();
+
+  String reply;
+  auto result = chat_client::send(
+      s_input,
+      /*on_delta=*/[](const String& d) {
+        scrollback::append_to_last(d.c_str(),
+                                   chat_view::scrollback_width_chars());
+        chat_view::mark_dirty();
+        chat_view::render();
+      },
+      reply);
+
+  if (!result.ok) {
+    scrollback::push(scrollback::LineKind::kError, result.error,
+                     chat_view::scrollback_width_chars());
+    chat_view::mark_dirty();
+    chat_view::set_status(chat_view::Status::kError, result.error);
   } else {
-    Serial.println("==== FAIL: no network reachable ====");
+    chat_view::set_status(chat_view::Status::kReady);
   }
+
+  s_input = "";
+  s_cursor = 0;
+  redraw();
 }
 
 void setup() {
   auto cfg5 = M5.config();
-  M5.begin(cfg5);
-  lcd_status("booting...");
+  M5Cardputer.begin(cfg5, /*enableKeyboard=*/true);
 
   Serial.begin(115200);
-  uint32_t deadline = millis() + 10000;
+  uint32_t deadline = millis() + 5000;
   while (!Serial && millis() < deadline) delay(50);
-  delay(500);
 
-  Serial.println();
-  Serial.println("==== Cardputer-AI M1 — Wi-Fi + WireGuard ====");
+  chat_view::begin();
+  scrollback::begin();
+  keyboard_input::begin();
+  chat_client::begin();
 
-  lcd_status("wifi: connecting...");
+  chat_view::set_status(chat_view::Status::kWifiConnecting);
+  redraw();
+
   if (!wifi_sta::connect(wg_secrets::kWifiSSID, wg_secrets::kWifiPassword,
                          Serial)) {
-    Serial.println("STOP: Wi-Fi failed — supervisor will retry");
-    lcd_status("wifi: FAILED", TFT_RED);
+    scrollback::push(scrollback::LineKind::kError, "wifi failed",
+                     chat_view::scrollback_width_chars());
+    chat_view::mark_dirty();
+    chat_view::set_status(chat_view::Status::kError, "wifi");
+    redraw();
     return;
   }
-  lcd_status("wifi: OK");
 
-  // CRITICAL for WireGuard: sync wall clock via NTP before bringing the
-  // tunnel up. WG handshake initiations carry a TAI64N timestamp; the
-  // server tracks the greatest accepted value and rejects any equal-or-
-  // lesser timestamp as a replay. Without NTP, every reboot reuses the
-  // same near-epoch timestamp and after the very first successful
-  // handshake the server refuses all subsequent ones.
-  lcd_status("ntp: syncing...");
+  // NTP before WG — see M1 report. Without this WG handshakes get rejected
+  // as replays after the first successful one.
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-  Serial.println("ntp: waiting for time sync...");
   uint32_t ntp_deadline = millis() + 15000;
-  time_t now = 0;
-  while ((now = time(nullptr)) < 1700000000 && millis() < ntp_deadline) {
-    delay(250);
-    Serial.print('.');
-  }
-  Serial.println();
-  if (now >= 1700000000) {
-    Serial.printf("ntp: time set, epoch=%ld\n", (long) now);
-  } else {
-    Serial.println("ntp: FAILED to sync; WG handshake will likely be rejected as replay");
-    lcd_status("ntp: FAILED", TFT_YELLOW);
-  }
+  while (time(nullptr) < 1700000000 && millis() < ntp_deadline) delay(250);
 
-  // Quick DNS sanity before we ask WG to resolve its endpoint.
-  IPAddress test_ip;
-  if (WiFi.hostByName("one.one.one.one", test_ip)) {
-    Serial.printf("dns: one.one.one.one -> %s\n", test_ip.toString().c_str());
-  } else {
-    Serial.println("dns: lookup FAILED (continuing — WG endpoint is an IP)");
-  }
+  chat_view::set_status(chat_view::Status::kWgConnecting);
+  redraw();
 
-  lcd_status("wg: connecting...");
   auto cfg = wg_cfg();
   if (!wg_link::start(cfg, Serial)) {
-    Serial.println("STOP: WireGuard failed — supervisor will retry");
-    lcd_status("wg: FAILED", TFT_RED);
+    scrollback::push(scrollback::LineKind::kError, "wg failed",
+                     chat_view::scrollback_width_chars());
+    chat_view::mark_dirty();
+    chat_view::set_status(chat_view::Status::kError, "wg");
+    redraw();
     return;
   }
-  lcd_status("wg: UP, testing...");
 
-  // Give the kernel a moment after route swap before we hit the wire.
-  delay(500);
-  run_reachability_proof();
-
-  // The reachability_proof printed its own SUCCESS/FAIL line; reflect
-  // that on the LCD using whether both pings worked. Cheap: read the
-  // last two ping results via a re-ping (fast since the tunnel is up).
-  IPAddress in_tunnel; in_tunnel.fromString(wg_secrets::kInTunnelTestIP);
-  IPAddress outbound;  outbound.fromString(wg_secrets::kOutboundTestIP);
-  bool a = net_probe::ping(in_tunnel, 1).ok;
-  bool b = net_probe::ping(outbound, 1).ok;
-  if (a && b) lcd_status("M1 SUCCESS: tunnel works", TFT_GREEN);
-  else        lcd_status("M1: partial / fail", TFT_YELLOW);
+  scrollback::push(scrollback::LineKind::kSystem,
+                   "tunnel up. type and hit enter.",
+                   chat_view::scrollback_width_chars());
+  chat_view::mark_dirty();
+  chat_view::set_status(chat_view::Status::kReady);
+  redraw();
 }
 
 void loop() {
-  // Supervisor: if Wi-Fi or WG drops, reconnect with simple backoff.
-  static uint32_t backoff_ms = 1000;
-  static const uint32_t kMaxBackoff = 30000;
-
+  // Supervisor: keep Wi-Fi + WG alive.
   if (!wifi_sta::is_up()) {
-    Serial.println("supervisor: wifi down — reconnecting");
+    chat_view::set_status(chat_view::Status::kWifiConnecting);
+    redraw();
     wg_link::stop();
-    if (!wifi_sta::connect(wg_secrets::kWifiSSID, wg_secrets::kWifiPassword,
-                           Serial, 20000)) {
-      delay(backoff_ms);
-      backoff_ms = min(backoff_ms * 2, kMaxBackoff);
-      return;
-    }
-    backoff_ms = 1000;
+    wifi_sta::connect(wg_secrets::kWifiSSID, wg_secrets::kWifiPassword,
+                      Serial, 20000);
+  } else if (!wg_link::is_up()) {
+    chat_view::set_status(chat_view::Status::kWgConnecting);
+    redraw();
+    auto cfg = wg_cfg();
+    wg_link::start(cfg, Serial);
+    chat_view::set_status(chat_view::Status::kReady);
+    redraw();
   }
 
-  if (!wg_link::is_up()) {
-    // Backoff so a persistently-failing peer doesn't spam logs.
-    static uint32_t wg_backoff = 2000;
-    static uint32_t next_attempt = 0;
-    if (millis() >= next_attempt) {
-      Serial.println("supervisor: wg down — restarting tunnel");
-      auto cfg = wg_cfg();
-      bool ok = wg_link::start(cfg, Serial);
-      next_attempt = millis() + wg_backoff;
-      wg_backoff = ok ? 2000 : min<uint32_t>(wg_backoff * 2, 30000);
+  // Status bar heartbeat: every 5 s while idle, show wg age + rssi.
+  static uint32_t last_tick = 0;
+  if (millis() - last_tick > 5000) {
+    last_tick = millis();
+    char detail[40];
+    std::snprintf(detail, sizeof(detail), "wg %us  rssi %d",
+                  (unsigned) wg_link::seconds_since_last_handshake(),
+                  (int) WiFi.RSSI());
+    chat_view::set_status(chat_view::Status::kReady, detail);
+    redraw();
+  }
+
+  // Keyboard input.
+  int k = keyboard_input::poll();
+  if (k == keyboard_input::KB_ENTER) {
+    send_current_input();
+  } else if (k == keyboard_input::KB_BACKSPACE) {
+    if (s_input.length() > 0) {
+      s_input.remove(s_input.length() - 1);
+      s_cursor = s_input.length();
+      redraw();
     }
-  } else {
-    // Healthy path. Heartbeat once a minute so the log isn't silent.
-    static uint32_t last_hb = 0;
-    if (millis() - last_hb > 60000) {
-      last_hb = millis();
-      Serial.printf("supervisor: wg UP, %u s since last handshake\n",
-                    wg_link::seconds_since_last_handshake());
+  } else if (k >= 0x20 && k < 0x7F) {
+    if (s_input.length() < 76) {  // leave room for "> " prompt
+      s_input += (char) k;
+      s_cursor = s_input.length();
+      redraw();
     }
   }
 
-  delay(2000);
+  delay(15);
 }
