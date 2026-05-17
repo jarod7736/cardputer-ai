@@ -13,8 +13,8 @@ def test_set_and_list_round_trip(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "stdin", io.StringIO("hello-secret\n"))
     assert cli.main(["set", "my_key"]) == 0
     assert (tmp_path / "my_key").read_text(encoding="utf-8").strip() == "hello-secret"
-    # File is 0600
-    assert (tmp_path / "my_key").stat().st_mode & 0o777 == 0o600
+    # File is 0640 (group-readable so the service user can read).
+    assert (tmp_path / "my_key").stat().st_mode & 0o777 == 0o640
 
     assert cli.main(["list"]) == 0
     out = capsys.readouterr().out

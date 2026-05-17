@@ -44,7 +44,14 @@ fi
 # 2. Directories
 install -d -m 0755 -o "$SVC_USER" -g "$SVC_USER" "$APP_DIR" "$LOG_DIR"
 install -d -m 0750 -o root        -g "$SVC_USER" "$CFG_DIR"
-install -d -m 0700 -o root        -g root         "$SECRETS_DIR"
+install -d -m 0750 -o root        -g "$SVC_USER" "$SECRETS_DIR"
+
+# 2.5 Fix perms on any existing secret files so the service user can read
+# them. Pre-M4 installs created them 0600 root:root.
+if compgen -G "$SECRETS_DIR/*" > /dev/null; then
+  chmod 0640 "$SECRETS_DIR"/*
+  chown root:"$SVC_USER" "$SECRETS_DIR"/*
+fi
 
 # 3. Sync source code (exclude .venv so we don't clobber the runtime env,
 #    and tests / dev artifacts).

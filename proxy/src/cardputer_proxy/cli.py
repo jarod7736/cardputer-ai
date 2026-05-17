@@ -59,7 +59,17 @@ def cmd_set(args: argparse.Namespace) -> int:
         sys.exit("refusing to write an empty secret")
     p = d / args.name
     p.write_text(value, encoding="utf-8")
-    p.chmod(stat.S_IRUSR | stat.S_IWUSR)  # 0600
+    # 0640 root:cardputer-proxy so the service user can read; rest of
+    # the world can't. chown only works when running as root, which the
+    # service install expects.
+    p.chmod(stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP)  # 0640
+    try:
+        import grp
+        gid = grp.getgrnam("cardputer-proxy").gr_gid
+        os.chown(p, 0, gid)
+    except (KeyError, PermissionError):
+        # Group doesn't exist or we're not root (test runs). Leave as is.
+        pass
     return 0
 
 
