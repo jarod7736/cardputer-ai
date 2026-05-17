@@ -7,6 +7,7 @@ namespace chat_view {
 
 static Status s_status = Status::kBoot;
 static char   s_status_detail[40] = "";
+static char   s_profile_label[24] = "";
 static char   s_input_buf[80] = "";
 static size_t s_cursor = 0;
 static bool   s_dirty  = true;
@@ -78,6 +79,16 @@ void set_status(Status s, const char* detail) {
   s_dirty = true;
 }
 
+void set_active_profile_label(const char* label) {
+  if (label) {
+    std::strncpy(s_profile_label, label, sizeof(s_profile_label) - 1);
+    s_profile_label[sizeof(s_profile_label) - 1] = '\0';
+  } else {
+    s_profile_label[0] = '\0';
+  }
+  s_dirty = true;
+}
+
 void set_input(const char* buf, size_t cursor) {
   std::strncpy(s_input_buf, buf, sizeof(s_input_buf) - 1);
   s_input_buf[sizeof(s_input_buf) - 1] = '\0';
@@ -91,8 +102,18 @@ static void draw_status_row() {
   M5Cardputer.Display.setTextSize(kStatusFontSize);
   M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_NAVY);
   M5Cardputer.Display.setCursor(0, 0);
-  M5Cardputer.Display.printf(" %s %s",
-                              label_for_status(s_status), s_status_detail);
+  // Layout: " <profile_label>  <state> <detail>" — profile on the left
+  // (most useful at a glance), state + detail to the right of it.
+  if (s_profile_label[0] != '\0') {
+    M5Cardputer.Display.printf(" %s  %s %s",
+                                s_profile_label,
+                                label_for_status(s_status),
+                                s_status_detail);
+  } else {
+    M5Cardputer.Display.printf(" %s %s",
+                                label_for_status(s_status),
+                                s_status_detail);
+  }
 }
 
 static void draw_scrollback() {

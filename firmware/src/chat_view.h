@@ -26,4 +26,8 @@ uint8_t scrollback_height_lines();
 // scrollback contents change — we don't observe scrollback directly).
 void mark_dirty();
 
+// Set the active profile label shown in the top status bar. Truncated
+// to fit alongside the status text.
+void set_active_profile_label(const char* label);
+
 }  // namespace chat_view
