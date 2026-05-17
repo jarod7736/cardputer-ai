@@ -60,16 +60,23 @@ int poll() {
     if (state.enter)  s_pending_enter     = true;
     if (state.del)    s_pending_backspace = true;
     if (state.tab)    s_pending_tab       = true;
-    for (auto c : state.word) {
-      if (c >= 0x20 && c < 0x7F) enqueue(c);
-    }
-    // HID scan codes — arrow keys live here, not in word.
-    for (auto hid : state.hid_keys) {
-      switch (hid) {
-        case 0x4F: enqueue_special(KB_RIGHT); break;
-        case 0x50: enqueue_special(KB_LEFT);  break;
-        case 0x51: enqueue_special(KB_DOWN);  break;
-        case 0x52: enqueue_special(KB_UP);    break;
+    if (state.fn) {
+      // Cardputer arrows are Fn + ,./; (printed on those keycaps).
+      // Library still emits the printable char in `word`, so dispatch
+      // from there when Fn is held and swallow the printable.
+      for (auto c : state.word) {
+        switch (c) {
+          case ',': enqueue_special(KB_LEFT);  break;
+          case '.': enqueue_special(KB_DOWN);  break;
+          case ';': enqueue_special(KB_UP);    break;
+          case '/': enqueue_special(KB_RIGHT); break;
+          case '`': s_pending_escape = true;   break;  // Fn+` = Esc
+          default: break;
+        }
+      }
+    } else {
+      for (auto c : state.word) {
+        if (c >= 0x20 && c < 0x7F) enqueue(c);
       }
     }
   }
