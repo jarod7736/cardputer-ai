@@ -65,3 +65,28 @@ class TestResult(BaseModel):
     latency_ms: int
     first_token_ms: int | None = None
     error: str | None = None
+
+
+class Token(BaseModel):
+    device_id: str = Field(..., pattern=r"^[a-z0-9-]{3,32}$")
+    token: str = Field(..., min_length=20)
+    label: str = ""
+    created_at: str
+    revoked: bool = False
+
+
+class Peer(BaseModel):
+    device_id: str = Field(..., pattern=r"^[a-z0-9-]{3,32}$")
+    public_key: str
+    address: str
+    label: str = ""
+    created_at: str
+
+
+class PeersFile(BaseModel):
+    server_pubkey: str = ""
+    server_endpoint: str = ""
+    network_cidr: str = "10.42.0.0/24"
+    proxy_host: str = ""
+    proxy_port: int = 8420
+    peers: list[Peer] = Field(default_factory=list)

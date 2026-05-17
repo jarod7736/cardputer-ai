@@ -1,6 +1,7 @@
 """Bearer-token authentication dependency.
 
-M2 has a single token; M5 will move to per-device tokens with scopes.
+M5: per-device tokens via TokenStore. The legacy M4 single bearer is
+accepted as a fallback iff it still exists on disk (smooth upgrade).
 """
 
 from __future__ import annotations
@@ -20,13 +21,22 @@ def require_bearer(
     authorization: str | None = Header(default=None),
     settings: Settings = Depends(settings_from_request),
 ) -> None:
-    """Reject if Authorization is missing or doesn't match the configured token.
-
-    Uses constant-time comparison so we don't leak token length via timing.
-    """
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer")
     presented = authorization.split(" ", 1)[1].strip()
-    expected = settings.device_bearer_token
-    if not hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8")):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid bearer")
+
+    token = settings.token_store.get_by_token(presented)
+    if token is not None:
+        if token.revoked:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="token revoked"
+            )
+        return
+
+    if settings.legacy_bearer_token is not None and hmac.compare_digest(
+        presented.encode("utf-8"),
+        settings.legacy_bearer_token.encode("utf-8"),
+    ):
+        return
+
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid bearer")

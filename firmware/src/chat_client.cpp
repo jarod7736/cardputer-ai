@@ -4,15 +4,23 @@
 #include <cstring>
 
 #include "http_sse.h"
-#include "proxy_secrets.h"
 
 namespace chat_client {
 
 static std::vector<Message> s_history;
+static String   s_host;
+static uint16_t s_port = 0;
+static String   s_bearer;
 
 void begin() {
   s_history.clear();
   s_history.reserve(16);
+}
+
+void configure(const String& host, uint16_t port, const String& bearer) {
+  s_host   = host;
+  s_port   = port;
+  s_bearer = bearer;
 }
 
 const std::vector<Message>& history() { return s_history; }
@@ -112,9 +120,9 @@ SendResult send(const String& profile_id,
   assistant_out = "";
 
   http_sse::Result hr = http_sse::post_sse(
-      proxy_secrets::kHost, proxy_secrets::kPort,
+      s_host.c_str(), s_port,
       "/v1/chat/completions",
-      proxy_secrets::kBearerToken,
+      s_bearer.c_str(),
       body.c_str(),
       [&](const char* line) {
         String delta;

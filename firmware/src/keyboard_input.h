@@ -20,6 +20,9 @@ constexpr int KB_LEFT      = 0x100 + 0x50;
 constexpr int KB_DOWN      = 0x100 + 0x51;
 constexpr int KB_UP        = 0x100 + 0x52;
 
+// Soft chord: Fn+S → open settings.
+constexpr int KB_SETTINGS  = 0x200;
+
 // Must be called after M5Cardputer.begin().
 void begin();
 
