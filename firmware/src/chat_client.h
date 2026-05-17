@@ -17,6 +17,10 @@ struct SendResult {
 
 void begin();
 
+// Runtime endpoint configuration. Call once before send(). Replaces the
+// M3-era compile-time proxy_secrets:: lookups.
+void configure(const String& host, uint16_t port, const String& bearer);
+
 // Append user_text as a user turn, send the full conversation to the
 // proxy under the given profile_id, accumulate the streamed reply into
 // assistant_out. The per-delta callback fires for each text chunk so

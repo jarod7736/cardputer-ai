@@ -5,9 +5,18 @@
 #include <cstdio>
 #include <cstring>
 
-#include "proxy_secrets.h"
-
 namespace proxy_api {
+
+static String   s_host;
+static uint16_t s_port = 0;
+static String   s_bearer;
+
+void configure(const String& host, uint16_t port, const String& bearer) {
+  s_host   = host;
+  s_port   = port;
+  s_bearer = bearer;
+}
+
 
 static const char* skip_ws(const char* p) {
   while (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t') ++p;
@@ -71,7 +80,7 @@ FetchResult fetch_profiles() {
 
   WiFiClient cx;
   cx.setTimeout(10000);
-  if (!cx.connect(proxy_secrets::kHost, proxy_secrets::kPort)) {
+  if (!cx.connect(s_host.c_str(), s_port)) {
     std::snprintf(r.error, sizeof(r.error), "connect failed");
     return r;
   }
@@ -82,7 +91,7 @@ FetchResult fetch_profiles() {
       "Authorization: Bearer %s\r\n"
       "Accept: application/json\r\n"
       "Connection: close\r\n\r\n",
-      proxy_secrets::kHost, proxy_secrets::kBearerToken);
+      s_host.c_str(), s_bearer.c_str());
 
   // Drain headers, accumulate body.
   String body;
