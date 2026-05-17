@@ -17,11 +17,13 @@ from cardputer_proxy.schemas import (
     ProfileList,
     ProfileUpdate,
 )
+from cardputer_proxy.secrets_store import SecretsStore
 from cardputer_proxy.sse import chunks_to_sse
 
 
 def create_app() -> FastAPI:
     settings = load_settings()
+    secrets_store = SecretsStore(settings.secret_dir)
     app = FastAPI(title="cardputer-proxy", version="0.2.0")
     app.state.settings = settings
 
@@ -99,10 +101,35 @@ def create_app() -> FastAPI:
                 detail=f"adapter not implemented: {profile.provider}",
             )
 
+        # Resolve the upstream credential based on the profile's auth.kind.
+        secret: str | None
+        if profile.auth.kind == "proxy-secret":
+            if not profile.auth.secret_ref:
+                raise HTTPException(
+                    500, detail=f"profile {profile.id}: missing secret_ref"
+                )
+            try:
+                secret = secrets_store.read(profile.auth.secret_ref)
+            except (FileNotFoundError, ValueError) as e:
+                raise HTTPException(
+                    500, detail=f"profile {profile.id}: {e}"
+                ) from e
+        elif profile.auth.kind == "device-key":
+            # M5 will accept X-Device-Provided-Key from the request. For
+            # now no device firmware sends it, so explicit 501.
+            raise HTTPException(
+                501,
+                detail=f"profile {profile.id}: device-key auth not wired (M5)",
+            )
+        elif profile.auth.kind == "none":
+            secret = None
+        else:
+            raise HTTPException(
+                500, detail=f"profile {profile.id}: unknown auth kind"
+            )
+
         adapter = AnthropicAdapter()
-        chunk_iter = adapter.stream_chat(
-            profile, req, secret=settings.anthropic_api_key
-        )
+        chunk_iter = adapter.stream_chat(profile, req, secret=secret)
 
         try:
             first = await chunk_iter.__anext__()

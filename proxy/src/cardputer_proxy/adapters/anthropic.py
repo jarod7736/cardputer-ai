@@ -43,7 +43,7 @@ class AnthropicAdapter:
         self,
         profile: Profile,
         request: ChatCompletionRequest,
-        secret: str,
+        secret: str | None,
     ) -> AsyncIterator[dict]:
         system, messages = _split_system(request)
         body: dict = {

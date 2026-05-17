@@ -40,7 +40,10 @@ class Adapter(Protocol):
         self,
         profile: Profile,
         request: ChatCompletionRequest,
-        secret: str,
+        secret: str | None,
     ) -> AsyncIterator[dict]:
-        """Yield OAI-shaped chunk dicts. The caller wraps them in SSE."""
+        """Yield OAI-shaped chunk dicts. The caller wraps them in SSE.
+
+        secret is None when profile.auth.kind == "none".
+        """
         ...

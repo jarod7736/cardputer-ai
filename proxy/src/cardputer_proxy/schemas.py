@@ -30,6 +30,11 @@ class ChatCompletionRequest(BaseModel):
         return v
 
 
+class Auth(BaseModel):
+    kind: Literal["proxy-secret", "device-key", "none"]
+    secret_ref: str | None = None
+
+
 class Profile(BaseModel):
     id: str
     label: str
@@ -38,6 +43,7 @@ class Profile(BaseModel):
     model: str
     max_tokens: int = 4096
     temperature: float = 1.0
+    auth: Auth = Auth(kind="proxy-secret", secret_ref="anthropic_api_key")
 
 
 class ProfileList(BaseModel):
