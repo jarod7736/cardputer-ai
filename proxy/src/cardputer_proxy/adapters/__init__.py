@@ -24,4 +24,7 @@ def get(provider: str) -> Adapter | None:
 
 
 # Import side effect: each adapter file calls register(...) on import.
-from cardputer_proxy.adapters import anthropic  # noqa: F401, E402
+from cardputer_proxy.adapters import anthropic    # noqa: F401, E402
+from cardputer_proxy.adapters import openai       # noqa: F401, E402
+from cardputer_proxy.adapters import ollama       # noqa: F401, E402
+from cardputer_proxy.adapters import generic_oai  # noqa: F401, E402
