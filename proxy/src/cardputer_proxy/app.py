@@ -11,42 +11,99 @@ from fastapi.responses import StreamingResponse
 from cardputer_proxy import auth
 from cardputer_proxy.adapters.anthropic import AnthropicAdapter
 from cardputer_proxy.config import load_settings
-from cardputer_proxy.schemas import ChatCompletionRequest
+from cardputer_proxy.schemas import (
+    ChatCompletionRequest,
+    Profile,
+    ProfileList,
+    ProfileUpdate,
+)
 from cardputer_proxy.sse import chunks_to_sse
 
 
 def create_app() -> FastAPI:
     settings = load_settings()
-    app = FastAPI(title="cardputer-proxy", version="0.1.0")
+    app = FastAPI(title="cardputer-proxy", version="0.2.0")
     app.state.settings = settings
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    # --- profile catalog (M4) -----------------------------------------------
+
+    @app.get("/v1/profiles", dependencies=[Depends(auth.require_bearer)])
+    def list_profiles() -> ProfileList:
+        return ProfileList(profiles=list(settings.catalog.list().values()))
+
+    @app.get(
+        "/v1/profiles/{profile_id}",
+        dependencies=[Depends(auth.require_bearer)],
+    )
+    def get_profile(profile_id: str) -> Profile:
+        p = settings.catalog.get(profile_id)
+        if p is None:
+            raise HTTPException(404, detail=f"unknown profile: {profile_id}")
+        return p
+
+    @app.post(
+        "/v1/profiles",
+        status_code=201,
+        dependencies=[Depends(auth.require_bearer)],
+    )
+    def create_profile(profile: Profile) -> Profile:
+        if settings.catalog.get(profile.id) is not None:
+            raise HTTPException(409, detail=f"profile exists: {profile.id}")
+        settings.catalog.upsert(profile)
+        return profile
+
+    @app.patch(
+        "/v1/profiles/{profile_id}",
+        dependencies=[Depends(auth.require_bearer)],
+    )
+    def patch_profile(profile_id: str, patch: ProfileUpdate) -> Profile:
+        existing = settings.catalog.get(profile_id)
+        if existing is None:
+            raise HTTPException(404, detail=f"unknown profile: {profile_id}")
+        updates = {k: v for k, v in patch.model_dump(exclude_none=True).items()}
+        updated = existing.model_copy(update=updates)
+        settings.catalog.upsert(updated)
+        return updated
+
+    @app.delete(
+        "/v1/profiles/{profile_id}",
+        status_code=204,
+        dependencies=[Depends(auth.require_bearer)],
+    )
+    def delete_profile(profile_id: str) -> None:
+        if not settings.catalog.delete(profile_id):
+            raise HTTPException(404, detail=f"unknown profile: {profile_id}")
+        return None
+
+    # --- chat completions ---------------------------------------------------
+
     @app.post(
         "/v1/chat/completions",
         dependencies=[Depends(auth.require_bearer)],
     )
     async def chat_completions(req: ChatCompletionRequest):
-        profile = settings.get_profile(req.profile_id)
+        profile = settings.catalog.get(req.profile_id)
         if profile is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"unknown profile: {req.profile_id}",
             )
         if profile.provider != "anthropic":
+            # Other adapters land in Tasks 5-7. Until then, anything else is 501.
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
                 detail=f"adapter not implemented: {profile.provider}",
             )
 
         adapter = AnthropicAdapter()
-        chunk_iter = adapter.stream_chat(profile, req, secret=settings.anthropic_api_key)
+        chunk_iter = adapter.stream_chat(
+            profile, req, secret=settings.anthropic_api_key
+        )
 
-        # Pre-flight: draw the first chunk before we start sending SSE bytes.
-        # This way an upstream 4xx/5xx surfaces as a clean structured 502
-        # instead of as a half-written event-stream.
         try:
             first = await chunk_iter.__anext__()
         except httpx.HTTPStatusError as e:
