@@ -210,7 +210,25 @@ void setup() {
   nvs_config::begin();
 
   // 1. First-boot SD provisioning fork.
-  auto outcome = provisioning::run(Serial);
+  //    SD.begin() blocks for >5 s when no card is present, tripping the
+  //    task watchdog. We only probe when:
+  //      - production build (no header fallback) AND NVS is empty, OR
+  //      - dev build with NVS empty AND no header fallback wouldn't help
+  //        (we keep dev path SD-free; re-provision via factory reset
+  //        flips DEV_USE_HEADER_SECRETS workflows back to provisioning).
+  provisioning::Outcome outcome;
+#if DEV_USE_HEADER_SECRETS
+  // Dev unit always has a header fallback. Don't touch SD on every
+  // boot; the user provisions via a separate build env without the
+  // header flag when they're ready.
+  outcome.result = provisioning::Result::kNoBundle;
+#else
+  if (!nvs_config::is_provisioned()) {
+    outcome = provisioning::run(Serial);
+  } else {
+    outcome.result = provisioning::Result::kNoBundle;
+  }
+#endif
   if (outcome.result == provisioning::Result::kCommitted) {
     auto& d = M5Cardputer.Display;
     d.fillScreen(TFT_BLACK);
