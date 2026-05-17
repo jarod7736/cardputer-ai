@@ -8,8 +8,8 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
 
+from cardputer_proxy import adapters as adapter_registry
 from cardputer_proxy import auth
-from cardputer_proxy.adapters.anthropic import AnthropicAdapter
 from cardputer_proxy.config import load_settings
 from cardputer_proxy.schemas import (
     ChatCompletionRequest,
@@ -94,11 +94,11 @@ def create_app() -> FastAPI:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"unknown profile: {req.profile_id}",
             )
-        if profile.provider != "anthropic":
-            # Other adapters land in Tasks 5-7. Until then, anything else is 501.
+        adapter = adapter_registry.get(profile.provider)
+        if adapter is None:
             raise HTTPException(
                 status_code=status.HTTP_501_NOT_IMPLEMENTED,
-                detail=f"adapter not implemented: {profile.provider}",
+                detail=f"no adapter for provider: {profile.provider}",
             )
 
         # Resolve the upstream credential based on the profile's auth.kind.
@@ -128,7 +128,6 @@ def create_app() -> FastAPI:
                 500, detail=f"profile {profile.id}: unknown auth kind"
             )
 
-        adapter = AnthropicAdapter()
         chunk_iter = adapter.stream_chat(profile, req, secret=secret)
 
         try:

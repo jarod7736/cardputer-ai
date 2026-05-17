@@ -98,3 +98,12 @@ class AnthropicAdapter:
                     # All other event types (content_block_start/stop,
                     # message_delta with usage info, tool blocks) are
                     # intentionally dropped for M2.
+
+
+def _register() -> None:
+    # Lazy import: avoid circular dep with adapters/__init__.py.
+    from cardputer_proxy.adapters import register
+    register("anthropic", AnthropicAdapter)
+
+
+_register()
