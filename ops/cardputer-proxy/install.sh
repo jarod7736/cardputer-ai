@@ -65,6 +65,15 @@ sudo -u "$SVC_USER" "$APP_DIR/.venv/bin/pip" install --quiet "$APP_DIR"
 install -m 0644 "$REPO_DIR/ops/cardputer-proxy/cardputer-proxy.service" \
         "/etc/systemd/system/$SVC_UNIT_NAME"
 
+# 5.5 Profile catalog — don't clobber an existing file.
+if [[ ! -f "$CFG_DIR/profiles.json" ]]; then
+  install -m 0640 -o root -g "$SVC_USER" \
+    "$REPO_DIR/ops/cardputer-proxy/profiles.json.example" \
+    "$CFG_DIR/profiles.json"
+  echo "Installed default profiles.json. Edit with:"
+  echo "  sudo \$EDITOR $CFG_DIR/profiles.json"
+fi
+
 # 6. Reload + start (or restart if already enabled)
 systemctl daemon-reload
 if systemctl is-enabled --quiet "$SVC_UNIT_NAME"; then
