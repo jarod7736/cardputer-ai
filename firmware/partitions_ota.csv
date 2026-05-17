@@ -1,0 +1,13 @@
+# 8 MB flash, OTA-ready layout (M5).
+# All offsets identical to the M3/M4 partitions.csv so existing NVS keys
+# (e.g. M4's cprox/profile_id) survive the swap. Adds nvs_keys for M6's
+# flash-encryption work; currently reserved space, no key material.
+#
+# Name,    Type, SubType, Offset,   Size,     Flags
+nvs,       data, nvs,     0x9000,   0x6000,
+otadata,   data, ota,     0xF000,   0x2000,
+phy_init,  data, phy,     0x11000,  0x1000,
+nvs_keys,  data, nvs_keys,0x12000,  0x1000,   encrypted
+factory,   app,  factory, 0x20000,  0x340000,
+ota_0,     app,  ota_0,   0x360000, 0x340000,
+spiffs,    data, spiffs,  0x6A0000, 0x150000,
